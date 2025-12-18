@@ -7,6 +7,8 @@ from rest_framework.response import Response
 from rest_framework.permissions import AllowAny
 from django.db.models import Q, Count
 from django.utils import timezone
+from django.contrib.auth import authenticate
+from rest_framework_simplejwt.tokens import RefreshToken
 from datetime import datetime, timedelta
 from api.models import (
     Project, Contact, ProjectImage, ProjectAmenity,
@@ -22,14 +24,61 @@ from api.serializers import (
 )
 
 
-class IsCustomAdminUser:
-    """
-    Custom permission to check if user is admin.
-    For now, allow all requests - authentication will be handled via frontend checks.
-    In production, implement proper token-based authentication here.
-    """
-    def has_permission(self, request, view):
-        return True
+# Admin Login
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def admin_login(request):
+    """Admin login using Django's built-in auth (createsuperuser)"""
+    try:
+        username = request.data.get('username')
+        password = request.data.get('password')
+        
+        if not username or not password:
+            return Response({
+                'error': 'Username and password are required'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Authenticate using Django's built-in auth
+        user = authenticate(username=username, password=password)
+        
+        if not user:
+            return Response({
+                'error': 'Invalid credentials'
+            }, status=status.HTTP_401_UNAUTHORIZED)
+        
+        if not user.is_staff and not user.is_superuser:
+            return Response({
+                'error': 'Not authorized as admin'
+            }, status=status.HTTP_401_UNAUTHORIZED)
+        
+        if not user.is_active:
+            return Response({
+                'error': 'Account is deactivated'
+            }, status=status.HTTP_401_UNAUTHORIZED)
+        
+        # Generate tokens
+        refresh = RefreshToken.for_user(user)
+        
+        return Response({
+            'message': 'Admin login successful',
+            'user': {
+                'id': user.id,
+                'username': user.username,
+                'email': user.email,
+                'first_name': user.first_name,
+                'last_name': user.last_name,
+                'is_admin': True,
+                'is_staff': user.is_staff,
+                'is_superuser': user.is_superuser,
+            },
+            'access_token': str(refresh.access_token),
+            'refresh_token': str(refresh)
+        }, status=status.HTTP_200_OK)
+        
+    except Exception as e:
+        return Response({
+            'error': f'Login failed: {str(e)}'
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 # Admin Dashboard Views

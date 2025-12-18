@@ -2,7 +2,9 @@ from rest_framework import viewsets, filters, status
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny, IsAuthenticated, IsAdminUser, BasePermission
-from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.tokens import AccessToken
+from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
+from rest_framework_simplejwt.authentication import JWTAuthentication
 from django.db.models import Q, Count
 from django.utils import timezone
 from datetime import datetime, timedelta
@@ -22,16 +24,44 @@ from .serializers import (
 )
 
 
-class IsCustomAdminUser(BasePermission):
+class IsCustomAuthenticated(BasePermission):
     """
-    Custom permission to check if user is admin based on is_admin field.
-    For now, we'll allow all authenticated requests since we're using custom auth.
-    In production, you should implement proper token-based authentication.
+    Custom permission to check if user is authenticated via JWT token.
+    Validates JWT token and attaches user to request.
     """
     def has_permission(self, request, view):
-        # For now, allow all requests - authentication will be handled via frontend checks
-        # In production, implement proper token authentication here
-        return True
+        jwt_auth = JWTAuthentication()
+        try:
+            auth_result = jwt_auth.authenticate(request)
+            if auth_result:
+                user, token = auth_result
+                # Attach user to request
+                request.user = user
+                return True
+            return False
+        except (InvalidToken, TokenError):
+            return False
+        except Exception as e:
+            print(f"Authentication error: {str(e)}")
+            return False
+
+
+class IsCustomAdminUser(IsCustomAuthenticated):
+    """
+    Custom permission to check if user is Django staff/superuser.
+    Admin login uses Django's built-in User model (createsuperuser).
+    """
+    def has_permission(self, request, view):
+        # First check if user is authenticated
+        if not super().has_permission(request, view):
+            return False
+        
+        # Check if user is Django staff or superuser
+        if hasattr(request.user, 'is_staff') and request.user.is_staff:
+            return True
+        if hasattr(request.user, 'is_superuser') and request.user.is_superuser:
+            return True
+        return False
 
 
 class ProjectViewSet(viewsets.ModelViewSet):
@@ -41,6 +71,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
     search_fields = ['title', 'location', 'description']
     ordering_fields = ['created_at', 'views', 'price']
     ordering = ['-created_at']
+    
     
     def get_permissions(self):
         """
@@ -172,7 +203,11 @@ class BlogPostViewSet(viewsets.ModelViewSet):
     
     def get_queryset(self):
         # Admin can see all, public only sees published
-        if self.request.user and hasattr(self.request.user, 'is_admin') and self.request.user.is_admin:
+        is_admin = self.request.user and (
+            getattr(self.request.user, 'is_staff', False) or 
+            getattr(self.request.user, 'is_superuser', False)
+        )
+        if is_admin:
             queryset = BlogPost.objects.all()
         else:
             queryset = BlogPost.objects.filter(published=True)
@@ -244,7 +279,11 @@ class CityViewSet(viewsets.ModelViewSet):
     
     def get_queryset(self):
         # Admin sees all, public only sees active
-        if self.request.user and hasattr(self.request.user, 'is_admin') and self.request.user.is_admin:
+        is_admin = self.request.user and (
+            getattr(self.request.user, 'is_staff', False) or 
+            getattr(self.request.user, 'is_superuser', False)
+        )
+        if is_admin:
             return City.objects.all()
         return City.objects.filter(is_active=True)
 
@@ -262,7 +301,11 @@ class TowerViewSet(viewsets.ModelViewSet):
     
     def get_queryset(self):
         # Admin sees all, public only sees active
-        if self.request.user and hasattr(self.request.user, 'is_admin') and self.request.user.is_admin:
+        is_admin = self.request.user and (
+            getattr(self.request.user, 'is_staff', False) or 
+            getattr(self.request.user, 'is_superuser', False)
+        )
+        if is_admin:
             return Tower.objects.all()
         return Tower.objects.filter(is_active=True)
     
@@ -472,11 +515,16 @@ def send_otp(request):
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def verify_otp(request):
-    """Verify OTP and create/login user"""
+    """
+    Verify OTP for normal users.
+    Flow:
+    - If user exists and is_registered=True -> Login directly
+    - If user exists but is_registered=False -> Need to complete profile
+    - If user doesn't exist -> Create user, need to complete profile
+    """
     try:
         mobile = request.data.get('mobile')
         otp_code = request.data.get('otp_code')
-        purpose = request.data.get('purpose', 'login')
         
         if not mobile or not otp_code:
             return Response({
@@ -484,11 +532,10 @@ def verify_otp(request):
                 'code': 'MISSING_FIELDS'
             }, status=status.HTTP_400_BAD_REQUEST)
         
-        # Find valid OTP
+        # Find valid OTP (check both login and signup purposes)
         otp = OTP.objects.filter(
             mobile=mobile,
             otp_code=otp_code,
-            purpose=purpose,
             is_verified=False,
             expires_at__gt=timezone.now()
         ).first()
@@ -503,131 +550,95 @@ def verify_otp(request):
         otp.is_verified = True
         otp.save()
         
-        if purpose == 'signup':
-            # Get user data
-            first_name = request.data.get('first_name', '')
-            last_name = request.data.get('last_name', '')
-            email = request.data.get('email', '')
-            
-            # Create or get user
-            user, created = User.objects.get_or_create(
-                mobile=mobile,
-                defaults={
-                    'first_name': first_name,
-                    'last_name': last_name,
-                    'email': email if email else None,
-                }
-            )
-            
-            if not created:
-                # Update user info if exists
-                user.first_name = first_name or user.first_name
-                user.last_name = last_name or user.last_name
-                if email:
-                    user.email = email
-                user.save()
-            
-            user.last_login = timezone.now()
-            user.save()
-            
-            serializer = UserSerializer(user)
-            user_data = serializer.data
-            
-            # Generate JWT tokens
-            refresh = RefreshToken.for_user(user)
-            access_token = str(refresh.access_token)
-            refresh_token = str(refresh)
-            
-            return Response({
-                'message': 'User registered successfully',
-                'user': user_data,
-                'tokens': {
-                    'access': access_token,
-                    'refresh': refresh_token
-                }
-            }, status=status.HTTP_201_CREATED)
+        # Check if user exists
+        user = User.objects.filter(mobile=mobile).first()
         
-        elif purpose == 'login':
-            # Get or create user
-            user, created = User.objects.get_or_create(
-                mobile=mobile,
-                defaults={
-                    'first_name': 'User',
-                    'last_name': '',
-                }
-            )
-            
-            # Check if there are any admin users in the system
-            admin_count = User.objects.filter(is_admin=True).count()
-            
-            # If this is a new user and there are no admins, make them admin
-            if created and admin_count == 0:
-                user.is_admin = True
-                print("=" * 60)
-                print("🔑 FIRST USER CREATED - AUTOMATICALLY SET AS ADMIN")
-                print(f"📱 Mobile: {mobile}")
-                print("=" * 60)
-            # If user exists but there are no admins, make them admin (for first-time setup)
-            elif not created and admin_count == 0:
-                user.is_admin = True
-                print("=" * 60)
-                print("🔑 NO ADMINS FOUND - SETTING USER AS ADMIN")
-                print(f"📱 Mobile: {mobile}")
-                print("=" * 60)
-            
-            # Refresh user from database to ensure we have latest data
-            user.refresh_from_db()
+        if user and user.is_registered:
+            # User exists and is registered - Login directly
             user.last_login = timezone.now()
             user.save()
             
-            # Print user status for debugging
-            print("=" * 60)
-            print("👤 USER LOGIN INFO:")
-            print(f"📱 Mobile: {user.mobile}")
-            print(f"👤 Name: {user.first_name} {user.last_name}")
-            print(f"🔑 Is Admin: {user.is_admin}")
-            print(f"✅ Active: {user.is_active}")
-            print("=" * 60)
-            
             serializer = UserSerializer(user)
-            user_data = serializer.data
-            
-            # Generate JWT tokens
-            refresh = RefreshToken.for_user(user)
-            access_token = str(refresh.access_token)
-            refresh_token = str(refresh)
-            
-            # Ensure is_admin is in the response
-            print(f"📤 Sending user data: {user_data}")
+            access_token = AccessToken.for_user(user)
             
             return Response({
                 'message': 'Login successful',
-                'user': user_data,
-                'tokens': {
-                    'access': access_token,
-                    'refresh': refresh_token
-                }
+                'user': serializer.data,
+                'access_token': str(access_token),
+                'needs_registration': False
             }, status=status.HTTP_200_OK)
         
-        elif purpose == 'contact':
-            # Just verify OTP for contact form
+        elif user and not user.is_registered:
+            # User exists but not registered - Need profile completion
             return Response({
-                'message': 'OTP verified successfully'
+                'message': 'OTP verified. Please complete your profile.',
+                'needs_registration': True,
+                'mobile': mobile
             }, status=status.HTTP_200_OK)
         
-        return Response({
-            'error': 'Invalid purpose',
-            'code': 'INVALID_PURPOSE'
-        }, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            # New user - Create and need profile completion
+            user = User.objects.create(mobile=mobile, is_registered=False)
+            return Response({
+                'message': 'OTP verified. Please complete your profile.',
+                'needs_registration': True,
+                'mobile': mobile
+            }, status=status.HTTP_200_OK)
+            
     except Exception as e:
-        print("=" * 60)
-        print("❌ ERROR IN VERIFY_OTP:")
-        print(f"Error Type: {type(e).__name__}")
-        print(f"Error Message: {str(e)}")
-        print(f"Traceback: {traceback.format_exc()}")
-        print("=" * 60)
+        print(f"❌ ERROR IN VERIFY_OTP: {str(e)}")
         return Response({
             'error': f'Failed to verify OTP: {str(e)}',
             'code': 'VERIFICATION_ERROR'
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def complete_registration(request):
+    """Complete user registration after OTP verification"""
+    try:
+        mobile = request.data.get('mobile')
+        first_name = request.data.get('first_name')
+        last_name = request.data.get('last_name')
+        email = request.data.get('email', '')
+        
+        if not mobile or not first_name or not last_name:
+            return Response({
+                'error': 'Mobile, first name and last name are required',
+                'code': 'MISSING_FIELDS'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        user = User.objects.filter(mobile=mobile).first()
+        
+        if not user:
+            return Response({
+                'error': 'User not found. Please verify OTP first.',
+                'code': 'USER_NOT_FOUND'
+            }, status=status.HTTP_404_NOT_FOUND)
+        
+        # Update user profile
+        user.first_name = first_name
+        user.last_name = last_name
+        if email:
+            user.email = email
+        user.is_registered = True
+        user.last_login = timezone.now()
+        user.save()
+        
+        serializer = UserSerializer(user)
+        access_token = AccessToken.for_user(user)
+        
+        return Response({
+            'message': 'Registration successful',
+            'user': serializer.data,
+            'access_token': str(access_token)
+        }, status=status.HTTP_201_CREATED)
+        
+    except Exception as e:
+        print(f"❌ ERROR IN COMPLETE_REGISTRATION: {str(e)}")
+        return Response({
+            'error': f'Registration failed: {str(e)}',
+            'code': 'REGISTRATION_ERROR'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 

@@ -366,13 +366,13 @@ class Flat(models.Model):
 
 
 class User(models.Model):
-    """Custom User model for mobile-based authentication"""
-    first_name = models.CharField(max_length=100)
-    last_name = models.CharField(max_length=100)
+    """Custom User model for mobile-based authentication (Normal Users)"""
+    first_name = models.CharField(max_length=100, blank=True, default='')
+    last_name = models.CharField(max_length=100, blank=True, default='')
     email = models.EmailField(blank=True, null=True)
     mobile = models.CharField(max_length=15, unique=True)
     is_active = models.BooleanField(default=True)
-    is_admin = models.BooleanField(default=False)
+    is_registered = models.BooleanField(default=False)  # True after user completes profile
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     last_login = models.DateTimeField(blank=True, null=True)
@@ -381,7 +381,9 @@ class User(models.Model):
         ordering = ['-created_at']
     
     def __str__(self):
-        return f"{self.first_name} {self.last_name} - {self.mobile}"
+        if self.first_name:
+            return f"{self.first_name} {self.last_name} - {self.mobile}"
+        return f"User - {self.mobile}"
 
 
 class OTP(models.Model):

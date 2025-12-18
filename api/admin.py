@@ -226,17 +226,17 @@ class FlatAdmin(admin.ModelAdmin):
 
 @admin.register(User)
 class UserAdmin(admin.ModelAdmin):
-    list_display = ['first_name', 'last_name', 'mobile', 'email', 'is_active', 'is_admin', 'last_login', 'created_at']
-    list_filter = ['is_active', 'is_admin', 'created_at']
+    list_display = ['first_name', 'last_name', 'mobile', 'email', 'is_active', 'is_registered', 'last_login', 'created_at']
+    list_filter = ['is_active', 'is_registered', 'created_at']
     search_fields = ['first_name', 'last_name', 'mobile', 'email']
-    list_editable = ['is_active', 'is_admin']
+    list_editable = ['is_active', 'is_registered']
     readonly_fields = ['created_at', 'updated_at', 'last_login']
     fieldsets = (
         ('Personal Information', {
             'fields': ('first_name', 'last_name', 'mobile', 'email')
         }),
         ('Status', {
-            'fields': ('is_active', 'is_admin')
+            'fields': ('is_active', 'is_registered')
         }),
         ('Timestamps', {
             'fields': ('last_login', 'created_at', 'updated_at'),

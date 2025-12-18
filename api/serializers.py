@@ -168,7 +168,7 @@ class AchievementSerializer(serializers.ModelSerializer):
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
-        fields = ['id', 'first_name', 'last_name', 'email', 'mobile', 'is_active', 'is_admin', 'created_at']
+        fields = ['id', 'first_name', 'last_name', 'email', 'mobile', 'is_active', 'is_registered', 'created_at']
         read_only_fields = ['id', 'created_at']
 
 

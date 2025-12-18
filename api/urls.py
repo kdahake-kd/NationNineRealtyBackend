@@ -1,12 +1,11 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from rest_framework_simplejwt.views import TokenRefreshView
 from .views import (
     CityViewSet, ProjectViewSet, ClientViewSet,
     ReviewViewSet, BlogPostViewSet,
     ContactViewSet, AchievementViewSet,
     TowerViewSet, FlatViewSet, ProjectImageViewSet, ProjectAmenityViewSet,
-    TowerAmenityViewSet, send_otp, verify_otp
+    TowerAmenityViewSet, send_otp, verify_otp, complete_registration
 )
 
 router = DefaultRouter()
@@ -25,9 +24,9 @@ router.register(r'achievements', AchievementViewSet, basename='achievement')
 
 urlpatterns = [
     path('', include(router.urls)),
-    # Authentication endpoints
+    # User Authentication (OTP based)
     path('auth/send-otp/', send_otp, name='send_otp'),
     path('auth/verify-otp/', verify_otp, name='verify_otp'),
-    path('auth/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
+    path('auth/complete-registration/', complete_registration, name='complete_registration'),
 ]
 
