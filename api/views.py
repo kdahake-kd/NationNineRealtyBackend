@@ -1,7 +1,9 @@
-from rest_framework import viewsets, filters, status
-from rest_framework.decorators import action, api_view, permission_classes
+from rest_framework import status
+from rest_framework.views import APIView
+from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny, IsAuthenticated, IsAdminUser, BasePermission
+from django.http import Http404
 from rest_framework_simplejwt.tokens import AccessToken
 from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
 from rest_framework_simplejwt.authentication import JWTAuthentication
@@ -64,25 +66,13 @@ class IsCustomAdminUser(IsCustomAuthenticated):
         return False
 
 
-class ProjectViewSet(viewsets.ModelViewSet):
-    queryset = Project.objects.all()
-    serializer_class = ProjectSerializer
-    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
-    search_fields = ['title', 'location', 'description']
-    ordering_fields = ['created_at', 'views', 'price']
-    ordering = ['-created_at']
-    
-    
-    def get_permissions(self):
-        """
-        Instantiates and returns the list of permissions that this view requires.
-        Allow read-only for everyone, but require admin for create/update/delete.
-        """
-        if self.action in ['create', 'update', 'partial_update', 'destroy']:
-            permission_classes = [IsCustomAdminUser]
-        else:
-            permission_classes = [AllowAny]
-        return [permission() for permission in permission_classes]
+class ProjectListCreateView(APIView):
+    """
+    List all projects or create a new project.
+    GET: List projects with filtering
+    POST: Create new project (Admin only)
+    """
+    permission_classes = [AllowAny]
     
     def get_queryset(self):
         queryset = Project.objects.all()
@@ -90,13 +80,12 @@ class ProjectViewSet(viewsets.ModelViewSet):
         transaction_type = self.request.query_params.get('transaction_type', None)
         featured = self.request.query_params.get('featured', None)
         is_hot = self.request.query_params.get('is_hot', None)
-        
-        # New search filters
         city = self.request.query_params.get('city', None)
         city_id = self.request.query_params.get('city_id', None)
         project_status = self.request.query_params.get('project_status', None)
         flat_type = self.request.query_params.get('flat_type', None)
         search_query = self.request.query_params.get('search', None)
+        limit = self.request.query_params.get('limit', None)
         
         if property_type:
             queryset = queryset.filter(property_type=property_type)
@@ -106,27 +95,19 @@ class ProjectViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(featured=featured.lower() == 'true')
         if is_hot is not None:
             queryset = queryset.filter(is_hot=is_hot.lower() == 'true')
-        
-        # City filter
         if city_id:
             queryset = queryset.filter(city_id=city_id)
         elif city:
             queryset = queryset.filter(
                 Q(city__name__icontains=city) | Q(city_name__icontains=city)
             )
-        
-        # Project status filter
         if project_status:
             queryset = queryset.filter(project_status=project_status)
-        
-        # Flat type filter - check if project has this flat type
         if flat_type:
             queryset = queryset.filter(
                 Q(available_flat_types__icontains=flat_type) |
                 Q(towers__flats__flat_type=flat_type)
             ).distinct()
-        
-        # Search query for project name or locality
         if search_query:
             queryset = queryset.filter(
                 Q(title__icontains=search_query) |
@@ -135,74 +116,230 @@ class ProjectViewSet(viewsets.ModelViewSet):
                 Q(city_name__icontains=search_query)
             )
         
+        # Ordering
+        ordering = self.request.query_params.get('ordering', '-created_at')
+        if ordering:
+            queryset = queryset.order_by(ordering)
+        else:
+            queryset = queryset.order_by('-created_at')
+        
+        if limit:
+            try:
+                queryset = queryset[:int(limit)]
+            except ValueError:
+                pass
+        
         return queryset
     
-    def retrieve(self, request, *args, **kwargs):
-        instance = self.get_object()
-        instance.views += 1
-        instance.save(update_fields=['views'])
-        serializer = self.get_serializer(instance)
+    def get(self, request):
+        queryset = self.get_queryset()
+        serializer = ProjectSerializer(queryset, many=True, context={'request': request})
         return Response(serializer.data)
     
-    def get_serializer_context(self):
-        context = super().get_serializer_context()
-        context['request'] = self.request
-        return context
+    def post(self, request):
+        # Check admin permission
+        if not IsCustomAdminUser().has_permission(request, self):
+            return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+        
+        serializer = ProjectSerializer(data=request.data, context={'request': request})
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
-class ClientViewSet(viewsets.ModelViewSet):
-    queryset = Client.objects.all()
-    serializer_class = ClientSerializer
+class ProjectDetailView(APIView):
+    """
+    Retrieve, update or delete a project instance.
+    GET: Retrieve project (increments views)
+    PUT: Update project (Admin only)
+    PATCH: Partial update project (Admin only)
+    DELETE: Delete project (Admin only)
+    """
+    permission_classes = [AllowAny]
     
-    def get_permissions(self):
-        if self.action in ['create', 'update', 'partial_update', 'destroy']:
-            permission_classes = [IsCustomAdminUser]
-        else:
-            permission_classes = [AllowAny]
-        return [permission() for permission in permission_classes]
+    def get_object(self, pk):
+        try:
+            return Project.objects.get(pk=pk)
+        except Project.DoesNotExist:
+            raise Http404
     
-    def get_serializer_context(self):
-        context = super().get_serializer_context()
-        context['request'] = self.request
-        return context
-
-
-class ReviewViewSet(viewsets.ModelViewSet):
-    queryset = Review.objects.all()
-    serializer_class = ReviewSerializer
-    
-    def get_permissions(self):
-        if self.action in ['create', 'update', 'partial_update', 'destroy']:
-            permission_classes = [IsCustomAdminUser]
-        else:
-            permission_classes = [AllowAny]
-        return [permission() for permission in permission_classes]
-    
-    @action(detail=False, methods=['get'])
-    def featured(self, request):
-        featured_reviews = Review.objects.filter(featured=True)
-        serializer = self.get_serializer(featured_reviews, many=True)
+    def get(self, request, pk):
+        project = self.get_object(pk)
+        project.views += 1
+        project.save(update_fields=['views'])
+        serializer = ProjectSerializer(project, context={'request': request})
         return Response(serializer.data)
-
-
-class BlogPostViewSet(viewsets.ModelViewSet):
-    queryset = BlogPost.objects.all()
-    serializer_class = BlogPostSerializer
-    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
-    search_fields = ['title', 'content', 'category']
-    ordering_fields = ['created_at', 'views']
-    ordering = ['-created_at']
-    lookup_field = 'slug'
     
-    def get_permissions(self):
-        if self.action in ['create', 'update', 'partial_update', 'destroy']:
-            permission_classes = [IsCustomAdminUser]
-        else:
-            permission_classes = [AllowAny]
-        return [permission() for permission in permission_classes]
+    def put(self, request, pk):
+        if not IsCustomAdminUser().has_permission(request, self):
+            return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+        
+        project = self.get_object(pk)
+        serializer = ProjectSerializer(project, data=request.data, context={'request': request})
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    def patch(self, request, pk):
+        if not IsCustomAdminUser().has_permission(request, self):
+            return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+        
+        project = self.get_object(pk)
+        serializer = ProjectSerializer(project, data=request.data, partial=True, context={'request': request})
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    def delete(self, request, pk):
+        if not IsCustomAdminUser().has_permission(request, self):
+            return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+        
+        project = self.get_object(pk)
+        project.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class ClientListCreateView(APIView):
+    """List all clients or create a new client"""
+    permission_classes = [AllowAny]
+    
+    def get(self, request):
+        clients = Client.objects.all()
+        serializer = ClientSerializer(clients, many=True, context={'request': request})
+        return Response(serializer.data)
+    
+    def post(self, request):
+        if not IsCustomAdminUser().has_permission(request, self):
+            return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+        serializer = ClientSerializer(data=request.data, context={'request': request})
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class ClientDetailView(APIView):
+    """Retrieve, update or delete a client instance"""
+    permission_classes = [AllowAny]
+    
+    def get_object(self, pk):
+        try:
+            return Client.objects.get(pk=pk)
+        except Client.DoesNotExist:
+            raise Http404
+    
+    def get(self, request, pk):
+        client = self.get_object(pk)
+        serializer = ClientSerializer(client, context={'request': request})
+        return Response(serializer.data)
+    
+    def put(self, request, pk):
+        if not IsCustomAdminUser().has_permission(request, self):
+            return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+        client = self.get_object(pk)
+        serializer = ClientSerializer(client, data=request.data, context={'request': request})
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    def patch(self, request, pk):
+        if not IsCustomAdminUser().has_permission(request, self):
+            return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+        client = self.get_object(pk)
+        serializer = ClientSerializer(client, data=request.data, partial=True, context={'request': request})
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    def delete(self, request, pk):
+        if not IsCustomAdminUser().has_permission(request, self):
+            return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+        client = self.get_object(pk)
+        client.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class ReviewListCreateView(APIView):
+    """List all reviews or create a new review"""
+    permission_classes = [AllowAny]
+    
+    def get(self, request):
+        reviews = Review.objects.all()
+        serializer = ReviewSerializer(reviews, many=True)
+        return Response(serializer.data)
+    
+    def post(self, request):
+        if not IsCustomAdminUser().has_permission(request, self):
+            return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+        serializer = ReviewSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class ReviewDetailView(APIView):
+    """Retrieve, update or delete a review instance"""
+    permission_classes = [AllowAny]
+    
+    def get_object(self, pk):
+        try:
+            return Review.objects.get(pk=pk)
+        except Review.DoesNotExist:
+            raise Http404
+    
+    def get(self, request, pk):
+        review = self.get_object(pk)
+        serializer = ReviewSerializer(review)
+        return Response(serializer.data)
+    
+    def put(self, request, pk):
+        if not IsCustomAdminUser().has_permission(request, self):
+            return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+        review = self.get_object(pk)
+        serializer = ReviewSerializer(review, data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    def patch(self, request, pk):
+        if not IsCustomAdminUser().has_permission(request, self):
+            return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+        review = self.get_object(pk)
+        serializer = ReviewSerializer(review, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    def delete(self, request, pk):
+        if not IsCustomAdminUser().has_permission(request, self):
+            return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+        review = self.get_object(pk)
+        review.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def review_featured(request):
+    """Get featured reviews"""
+    featured_reviews = Review.objects.filter(featured=True)
+    serializer = ReviewSerializer(featured_reviews, many=True)
+    return Response(serializer.data)
+
+
+class BlogPostListCreateView(APIView):
+    """List all blog posts or create a new blog post"""
+    permission_classes = [AllowAny]
     
     def get_queryset(self):
-        # Admin can see all, public only sees published
         is_admin = self.request.user and (
             getattr(self.request.user, 'is_staff', False) or 
             getattr(self.request.user, 'is_superuser', False)
@@ -211,74 +348,220 @@ class BlogPostViewSet(viewsets.ModelViewSet):
             queryset = BlogPost.objects.all()
         else:
             queryset = BlogPost.objects.filter(published=True)
+        
         project_id = self.request.query_params.get('project', None)
         if project_id:
             queryset = queryset.filter(project_id=project_id)
+        
+        # Search
+        search = self.request.query_params.get('search', None)
+        if search:
+            queryset = queryset.filter(
+                Q(title__icontains=search) |
+                Q(content__icontains=search) |
+                Q(category__icontains=search)
+            )
+        
+        # Ordering
+        ordering = self.request.query_params.get('ordering', '-created_at')
+        if ordering:
+            queryset = queryset.order_by(ordering)
+        else:
+            queryset = queryset.order_by('-created_at')
+        
+        limit = self.request.query_params.get('limit', None)
+        if limit:
+            try:
+                queryset = queryset[:int(limit)]
+            except ValueError:
+                pass
+        
         return queryset
     
-    def retrieve(self, request, *args, **kwargs):
-        instance = self.get_object()
-        instance.views += 1
-        instance.save(update_fields=['views'])
-        serializer = self.get_serializer(instance)
+    def get(self, request):
+        blog_posts = self.get_queryset()
+        serializer = BlogPostSerializer(blog_posts, many=True, context={'request': request})
         return Response(serializer.data)
     
-    def get_serializer_context(self):
-        context = super().get_serializer_context()
-        context['request'] = self.request
-        return context
+    def post(self, request):
+        if not IsCustomAdminUser().has_permission(request, self):
+            return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+        serializer = BlogPostSerializer(data=request.data, context={'request': request})
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
-class ContactViewSet(viewsets.ModelViewSet):
-    queryset = Contact.objects.all()
-    serializer_class = ContactSerializer
+class BlogPostDetailView(APIView):
+    """Retrieve, update or delete a blog post instance (by slug)"""
+    permission_classes = [AllowAny]
     
-    def get_permissions(self):
-        # Allow anyone to create (contact form), but only admin to read/update/delete
-        if self.action == 'create':
-            permission_classes = [AllowAny]
-        else:
-            permission_classes = [IsCustomAdminUser]
-        return [permission() for permission in permission_classes]
+    def get_object(self, slug):
+        try:
+            return BlogPost.objects.get(slug=slug)
+        except BlogPost.DoesNotExist:
+            raise Http404
+    
+    def get(self, request, slug):
+        blog_post = self.get_object(slug)
+        blog_post.views += 1
+        blog_post.save(update_fields=['views'])
+        serializer = BlogPostSerializer(blog_post, context={'request': request})
+        return Response(serializer.data)
+    
+    def put(self, request, slug):
+        if not IsCustomAdminUser().has_permission(request, self):
+            return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+        blog_post = self.get_object(slug)
+        serializer = BlogPostSerializer(blog_post, data=request.data, context={'request': request})
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    def patch(self, request, slug):
+        if not IsCustomAdminUser().has_permission(request, self):
+            return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+        blog_post = self.get_object(slug)
+        serializer = BlogPostSerializer(blog_post, data=request.data, partial=True, context={'request': request})
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    def delete(self, request, slug):
+        if not IsCustomAdminUser().has_permission(request, self):
+            return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+        blog_post = self.get_object(slug)
+        blog_post.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class ContactListCreateView(APIView):
+    """List all contacts or create a new contact"""
+    permission_classes = [AllowAny]
+    
+    def get(self, request):
+        if not IsCustomAdminUser().has_permission(request, self):
+            return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+        contacts = Contact.objects.all()
+        serializer = ContactSerializer(contacts, many=True)
+        return Response(serializer.data)
+    
+    def post(self, request):
+        # Anyone can create (contact form)
+        serializer = ContactSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class ContactDetailView(APIView):
+    """Retrieve, update or delete a contact instance (Admin only)"""
+    permission_classes = [IsCustomAdminUser]
+    
+    def get_object(self, pk):
+        try:
+            return Contact.objects.get(pk=pk)
+        except Contact.DoesNotExist:
+            raise Http404
+    
+    def get(self, request, pk):
+        contact = self.get_object(pk)
+        serializer = ContactSerializer(contact)
+        return Response(serializer.data)
+    
+    def put(self, request, pk):
+        contact = self.get_object(pk)
+        serializer = ContactSerializer(contact, data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    def patch(self, request, pk):
+        contact = self.get_object(pk)
+        serializer = ContactSerializer(contact, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    def delete(self, request, pk):
+        contact = self.get_object(pk)
+        contact.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class AchievementListCreateView(APIView):
+    """List all achievements or create a new achievement"""
+    permission_classes = [AllowAny]
+    
+    def get(self, request):
+        achievements = Achievement.objects.all()
+        serializer = AchievementSerializer(achievements, many=True, context={'request': request})
+        return Response(serializer.data)
+    
+    def post(self, request):
+        if not IsCustomAdminUser().has_permission(request, self):
+            return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+        serializer = AchievementSerializer(data=request.data, context={'request': request})
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class AchievementDetailView(APIView):
+    """Retrieve, update or delete an achievement instance"""
+    permission_classes = [AllowAny]
+    
+    def get_object(self, pk):
+        try:
+            return Achievement.objects.get(pk=pk)
+        except Achievement.DoesNotExist:
+            raise Http404
+    
+    def get(self, request, pk):
+        achievement = self.get_object(pk)
+        serializer = AchievementSerializer(achievement, context={'request': request})
+        return Response(serializer.data)
+    
+    def put(self, request, pk):
+        if not IsCustomAdminUser().has_permission(request, self):
+            return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+        achievement = self.get_object(pk)
+        serializer = AchievementSerializer(achievement, data=request.data, context={'request': request})
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    def patch(self, request, pk):
+        if not IsCustomAdminUser().has_permission(request, self):
+            return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+        achievement = self.get_object(pk)
+        serializer = AchievementSerializer(achievement, data=request.data, partial=True, context={'request': request})
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    def delete(self, request, pk):
+        if not IsCustomAdminUser().has_permission(request, self):
+            return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+        achievement = self.get_object(pk)
+        achievement.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class CityListCreateView(APIView):
+    """List all cities or create a new city"""
+    permission_classes = [AllowAny]
     
     def get_queryset(self):
-        # Admin sees all, public can only create
-        return Contact.objects.all()
-    
-    def perform_create(self, serializer):
-        serializer.save()
-
-
-class AchievementViewSet(viewsets.ModelViewSet):
-    queryset = Achievement.objects.all()
-    serializer_class = AchievementSerializer
-    
-    def get_permissions(self):
-        if self.action in ['create', 'update', 'partial_update', 'destroy']:
-            permission_classes = [IsCustomAdminUser]
-        else:
-            permission_classes = [AllowAny]
-        return [permission() for permission in permission_classes]
-    
-    def get_serializer_context(self):
-        context = super().get_serializer_context()
-        context['request'] = self.request
-        return context
-
-
-class CityViewSet(viewsets.ModelViewSet):
-    queryset = City.objects.all()
-    serializer_class = CitySerializer
-    
-    def get_permissions(self):
-        if self.action in ['create', 'update', 'partial_update', 'destroy']:
-            permission_classes = [IsCustomAdminUser]
-        else:
-            permission_classes = [AllowAny]
-        return [permission() for permission in permission_classes]
-    
-    def get_queryset(self):
-        # Admin sees all, public only sees active
         is_admin = self.request.user and (
             getattr(self.request.user, 'is_staff', False) or 
             getattr(self.request.user, 'is_superuser', False)
@@ -286,52 +569,146 @@ class CityViewSet(viewsets.ModelViewSet):
         if is_admin:
             return City.objects.all()
         return City.objects.filter(is_active=True)
-
-
-class TowerViewSet(viewsets.ModelViewSet):
-    queryset = Tower.objects.all()
-    serializer_class = TowerSerializer
     
-    def get_permissions(self):
-        if self.action in ['create', 'update', 'partial_update', 'destroy']:
-            permission_classes = [IsCustomAdminUser]
-        else:
-            permission_classes = [AllowAny]
-        return [permission() for permission in permission_classes]
+    def get(self, request):
+        cities = self.get_queryset()
+        serializer = CitySerializer(cities, many=True)
+        return Response(serializer.data)
+    
+    def post(self, request):
+        if not IsCustomAdminUser().has_permission(request, self):
+            return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+        serializer = CitySerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class CityDetailView(APIView):
+    """Retrieve, update or delete a city instance"""
+    permission_classes = [AllowAny]
+    
+    def get_object(self, pk):
+        try:
+            return City.objects.get(pk=pk)
+        except City.DoesNotExist:
+            raise Http404
+    
+    def get(self, request, pk):
+        city = self.get_object(pk)
+        serializer = CitySerializer(city)
+        return Response(serializer.data)
+    
+    def put(self, request, pk):
+        if not IsCustomAdminUser().has_permission(request, self):
+            return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+        city = self.get_object(pk)
+        serializer = CitySerializer(city, data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    def patch(self, request, pk):
+        if not IsCustomAdminUser().has_permission(request, self):
+            return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+        city = self.get_object(pk)
+        serializer = CitySerializer(city, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    def delete(self, request, pk):
+        if not IsCustomAdminUser().has_permission(request, self):
+            return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+        city = self.get_object(pk)
+        city.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class TowerListCreateView(APIView):
+    """List all towers or create a new tower"""
+    permission_classes = [AllowAny]
     
     def get_queryset(self):
-        # Admin sees all, public only sees active
         is_admin = self.request.user and (
             getattr(self.request.user, 'is_staff', False) or 
             getattr(self.request.user, 'is_superuser', False)
         )
         if is_admin:
-            return Tower.objects.all()
-        return Tower.objects.filter(is_active=True)
-    
-    def get_queryset(self):
-        queryset = Tower.objects.filter(is_active=True)
+            queryset = Tower.objects.all()
+        else:
+            queryset = Tower.objects.filter(is_active=True)
+        
         project_id = self.request.query_params.get('project', None)
         if project_id:
             queryset = queryset.filter(project_id=project_id)
+        
         return queryset
     
-    def get_serializer_context(self):
-        context = super().get_serializer_context()
-        context['request'] = self.request
-        return context
-
-
-class ProjectImageViewSet(viewsets.ModelViewSet):
-    queryset = ProjectImage.objects.all()
-    serializer_class = ProjectImageSerializer
+    def get(self, request):
+        towers = self.get_queryset()
+        serializer = TowerSerializer(towers, many=True, context={'request': request})
+        return Response(serializer.data)
     
-    def get_permissions(self):
-        if self.action in ['create', 'update', 'partial_update', 'destroy']:
-            permission_classes = [IsCustomAdminUser]
-        else:
-            permission_classes = [AllowAny]
-        return [permission() for permission in permission_classes]
+    def post(self, request):
+        if not IsCustomAdminUser().has_permission(request, self):
+            return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+        serializer = TowerSerializer(data=request.data, context={'request': request})
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class TowerDetailView(APIView):
+    """Retrieve, update or delete a tower instance"""
+    permission_classes = [AllowAny]
+    
+    def get_object(self, pk):
+        try:
+            return Tower.objects.get(pk=pk)
+        except Tower.DoesNotExist:
+            raise Http404
+    
+    def get(self, request, pk):
+        tower = self.get_object(pk)
+        serializer = TowerSerializer(tower, context={'request': request})
+        return Response(serializer.data)
+    
+    def put(self, request, pk):
+        if not IsCustomAdminUser().has_permission(request, self):
+            return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+        tower = self.get_object(pk)
+        serializer = TowerSerializer(tower, data=request.data, context={'request': request})
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    def patch(self, request, pk):
+        if not IsCustomAdminUser().has_permission(request, self):
+            return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+        tower = self.get_object(pk)
+        serializer = TowerSerializer(tower, data=request.data, partial=True, context={'request': request})
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    def delete(self, request, pk):
+        if not IsCustomAdminUser().has_permission(request, self):
+            return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+        tower = self.get_object(pk)
+        tower.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class ProjectImageListCreateView(APIView):
+    """List all project images or create a new project image"""
+    permission_classes = [AllowAny]
     
     def get_queryset(self):
         queryset = ProjectImage.objects.all()
@@ -340,22 +717,67 @@ class ProjectImageViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(project_id=project_id)
         return queryset
     
-    def get_serializer_context(self):
-        context = super().get_serializer_context()
-        context['request'] = self.request
-        return context
-
-
-class ProjectAmenityViewSet(viewsets.ModelViewSet):
-    queryset = ProjectAmenity.objects.all()
-    serializer_class = ProjectAmenitySerializer
+    def get(self, request):
+        images = self.get_queryset()
+        serializer = ProjectImageSerializer(images, many=True, context={'request': request})
+        return Response(serializer.data)
     
-    def get_permissions(self):
-        if self.action in ['create', 'update', 'partial_update', 'destroy']:
-            permission_classes = [IsCustomAdminUser]
-        else:
-            permission_classes = [AllowAny]
-        return [permission() for permission in permission_classes]
+    def post(self, request):
+        if not IsCustomAdminUser().has_permission(request, self):
+            return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+        serializer = ProjectImageSerializer(data=request.data, context={'request': request})
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class ProjectImageDetailView(APIView):
+    """Retrieve, update or delete a project image instance"""
+    permission_classes = [AllowAny]
+    
+    def get_object(self, pk):
+        try:
+            return ProjectImage.objects.get(pk=pk)
+        except ProjectImage.DoesNotExist:
+            raise Http404
+    
+    def get(self, request, pk):
+        image = self.get_object(pk)
+        serializer = ProjectImageSerializer(image, context={'request': request})
+        return Response(serializer.data)
+    
+    def put(self, request, pk):
+        if not IsCustomAdminUser().has_permission(request, self):
+            return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+        image = self.get_object(pk)
+        serializer = ProjectImageSerializer(image, data=request.data, context={'request': request})
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    def patch(self, request, pk):
+        if not IsCustomAdminUser().has_permission(request, self):
+            return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+        image = self.get_object(pk)
+        serializer = ProjectImageSerializer(image, data=request.data, partial=True, context={'request': request})
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    def delete(self, request, pk):
+        if not IsCustomAdminUser().has_permission(request, self):
+            return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+        image = self.get_object(pk)
+        image.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class ProjectAmenityListCreateView(APIView):
+    """List all project amenities or create a new project amenity"""
+    permission_classes = [AllowAny]
     
     def get_queryset(self):
         queryset = ProjectAmenity.objects.all()
@@ -363,18 +785,68 @@ class ProjectAmenityViewSet(viewsets.ModelViewSet):
         if project_id:
             queryset = queryset.filter(project_id=project_id)
         return queryset
-
-
-class TowerAmenityViewSet(viewsets.ModelViewSet):
-    queryset = TowerAmenity.objects.all()
-    serializer_class = TowerAmenitySerializer
     
-    def get_permissions(self):
-        if self.action in ['create', 'update', 'partial_update', 'destroy']:
-            permission_classes = [IsCustomAdminUser]
-        else:
-            permission_classes = [AllowAny]
-        return [permission() for permission in permission_classes]
+    def get(self, request):
+        amenities = self.get_queryset()
+        serializer = ProjectAmenitySerializer(amenities, many=True)
+        return Response(serializer.data)
+    
+    def post(self, request):
+        if not IsCustomAdminUser().has_permission(request, self):
+            return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+        serializer = ProjectAmenitySerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class ProjectAmenityDetailView(APIView):
+    """Retrieve, update or delete a project amenity instance"""
+    permission_classes = [AllowAny]
+    
+    def get_object(self, pk):
+        try:
+            return ProjectAmenity.objects.get(pk=pk)
+        except ProjectAmenity.DoesNotExist:
+            raise Http404
+    
+    def get(self, request, pk):
+        amenity = self.get_object(pk)
+        serializer = ProjectAmenitySerializer(amenity)
+        return Response(serializer.data)
+    
+    def put(self, request, pk):
+        if not IsCustomAdminUser().has_permission(request, self):
+            return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+        amenity = self.get_object(pk)
+        serializer = ProjectAmenitySerializer(amenity, data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    def patch(self, request, pk):
+        if not IsCustomAdminUser().has_permission(request, self):
+            return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+        amenity = self.get_object(pk)
+        serializer = ProjectAmenitySerializer(amenity, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    def delete(self, request, pk):
+        if not IsCustomAdminUser().has_permission(request, self):
+            return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+        amenity = self.get_object(pk)
+        amenity.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class TowerAmenityListCreateView(APIView):
+    """List all tower amenities or create a new tower amenity"""
+    permission_classes = [AllowAny]
     
     def get_queryset(self):
         queryset = TowerAmenity.objects.all()
@@ -382,45 +854,156 @@ class TowerAmenityViewSet(viewsets.ModelViewSet):
         if tower_id:
             queryset = queryset.filter(tower_id=tower_id)
         return queryset
-
-
-class FlatViewSet(viewsets.ModelViewSet):
-    queryset = Flat.objects.all()
-    serializer_class = FlatSerializer
-    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
-    search_fields = ['flat_number', 'flat_type']
-    ordering_fields = ['floor_number', 'price', 'carpet_area']
-    ordering = ['floor_number', 'flat_number']
     
-    def get_permissions(self):
-        if self.action in ['create', 'update', 'partial_update', 'destroy']:
-            permission_classes = [IsCustomAdminUser]
-        else:
-            permission_classes = [AllowAny]
-        return [permission() for permission in permission_classes]
+    def get(self, request):
+        amenities = self.get_queryset()
+        serializer = TowerAmenitySerializer(amenities, many=True)
+        return Response(serializer.data)
+    
+    def post(self, request):
+        if not IsCustomAdminUser().has_permission(request, self):
+            return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+        serializer = TowerAmenitySerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class TowerAmenityDetailView(APIView):
+    """Retrieve, update or delete a tower amenity instance"""
+    permission_classes = [AllowAny]
+    
+    def get_object(self, pk):
+        try:
+            return TowerAmenity.objects.get(pk=pk)
+        except TowerAmenity.DoesNotExist:
+            raise Http404
+    
+    def get(self, request, pk):
+        amenity = self.get_object(pk)
+        serializer = TowerAmenitySerializer(amenity)
+        return Response(serializer.data)
+    
+    def put(self, request, pk):
+        if not IsCustomAdminUser().has_permission(request, self):
+            return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+        amenity = self.get_object(pk)
+        serializer = TowerAmenitySerializer(amenity, data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    def patch(self, request, pk):
+        if not IsCustomAdminUser().has_permission(request, self):
+            return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+        amenity = self.get_object(pk)
+        serializer = TowerAmenitySerializer(amenity, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    def delete(self, request, pk):
+        if not IsCustomAdminUser().has_permission(request, self):
+            return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+        amenity = self.get_object(pk)
+        amenity.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class FlatListCreateView(APIView):
+    """List all flats or create a new flat"""
+    permission_classes = [AllowAny]
     
     def get_queryset(self):
         queryset = Flat.objects.all()
         tower_id = self.request.query_params.get('tower', None)
         flat_type = self.request.query_params.get('flat_type', None)
-        status = self.request.query_params.get('status', None)
+        status_param = self.request.query_params.get('status', None)
         floor = self.request.query_params.get('floor', None)
+        search = self.request.query_params.get('search', None)
         
         if tower_id:
             queryset = queryset.filter(tower_id=tower_id)
         if flat_type:
             queryset = queryset.filter(flat_type=flat_type)
-        if status:
-            queryset = queryset.filter(status=status)
+        if status_param:
+            queryset = queryset.filter(status=status_param)
         if floor:
             queryset = queryset.filter(floor_number=floor)
+        if search:
+            queryset = queryset.filter(
+                Q(flat_number__icontains=search) |
+                Q(flat_type__icontains=search)
+            )
+        
+        # Ordering
+        ordering = self.request.query_params.get('ordering', 'floor_number,flat_number')
+        if ordering:
+            queryset = queryset.order_by(*ordering.split(','))
+        else:
+            queryset = queryset.order_by('floor_number', 'flat_number')
         
         return queryset
     
-    def get_serializer_context(self):
-        context = super().get_serializer_context()
-        context['request'] = self.request
-        return context
+    def get(self, request):
+        flats = self.get_queryset()
+        serializer = FlatSerializer(flats, many=True, context={'request': request})
+        return Response(serializer.data)
+    
+    def post(self, request):
+        if not IsCustomAdminUser().has_permission(request, self):
+            return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+        serializer = FlatSerializer(data=request.data, context={'request': request})
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class FlatDetailView(APIView):
+    """Retrieve, update or delete a flat instance"""
+    permission_classes = [AllowAny]
+    
+    def get_object(self, pk):
+        try:
+            return Flat.objects.get(pk=pk)
+        except Flat.DoesNotExist:
+            raise Http404
+    
+    def get(self, request, pk):
+        flat = self.get_object(pk)
+        serializer = FlatSerializer(flat, context={'request': request})
+        return Response(serializer.data)
+    
+    def put(self, request, pk):
+        if not IsCustomAdminUser().has_permission(request, self):
+            return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+        flat = self.get_object(pk)
+        serializer = FlatSerializer(flat, data=request.data, context={'request': request})
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    def patch(self, request, pk):
+        if not IsCustomAdminUser().has_permission(request, self):
+            return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+        flat = self.get_object(pk)
+        serializer = FlatSerializer(flat, data=request.data, partial=True, context={'request': request})
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    def delete(self, request, pk):
+        if not IsCustomAdminUser().has_permission(request, self):
+            return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+        flat = self.get_object(pk)
+        flat.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 # Authentication Views
