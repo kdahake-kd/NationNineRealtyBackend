@@ -2,8 +2,9 @@ from rest_framework import serializers
 from .models import (
     City, Project, Client, Review, BlogPost,
     Contact, Achievement,
-    ProjectImage, ProjectAmenity, Tower, TowerAmenity, Flat, User, OTP
+    ProjectImage, ProjectAmenity, Tower, TowerAmenity, Flat, User, OTP , ProjectEnquiry
 )
+
 
 
 class ProjectImageSerializer(serializers.ModelSerializer):
@@ -178,3 +179,9 @@ class OTPSerializer(serializers.ModelSerializer):
         fields = ['mobile', 'otp_code', 'purpose', 'is_verified']
         read_only_fields = ['is_verified']
 
+
+
+class ProjectEnquirySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ProjectEnquiry
+        fields = '__all__'

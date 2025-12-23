@@ -2,7 +2,7 @@ from django.contrib import admin
 from .models import (
     City, Project, Client, Review, BlogPost, 
     Contact, Achievement,
-    ProjectImage, ProjectAmenity, Tower, TowerAmenity, Flat, User, OTP
+    ProjectImage, ProjectAmenity, Tower, TowerAmenity, Flat, User, OTP , ProjectEnquiry
 )
 
 
@@ -253,3 +253,11 @@ class OTPAdmin(admin.ModelAdmin):
     readonly_fields = ['created_at']
     ordering = ['-created_at']
 
+
+@admin.register(ProjectEnquiry)
+class ProjectEnquiryAdmin(admin.ModelAdmin):
+    list_display = ['project', 'user', 'name', 'mobile', 'subject', 'message', 'created_at']
+    list_filter = ['created_at']
+    search_fields = ['project__title', 'name', 'phone', 'subject']
+    readonly_fields = ['created_at']
+    ordering = ['-created_at']

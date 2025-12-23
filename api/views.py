@@ -21,9 +21,276 @@ from .serializers import (
     CitySerializer, ProjectSerializer, ClientSerializer,
     ReviewSerializer, BlogPostSerializer,
     ContactSerializer, AchievementSerializer,
-    TowerSerializer, FlatSerializer, UserSerializer, OTPSerializer,
-    ProjectImageSerializer, ProjectAmenitySerializer, TowerAmenitySerializer
+    TowerSerializer, FlatSerializer, UserSerializer, OTPSerializer, 
+    ProjectImageSerializer, ProjectAmenitySerializer, TowerAmenitySerializer , ProjectEnquirySerializer
 )
+
+
+
+# Authentication Views
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def send_otp(request):
+    """Send OTP to mobile number"""
+    try:
+        print("=" * 60)
+        print("📥 OTP REQUEST RECEIVED")
+        print("=" * 60)
+        print(f"Request Data: {request.data}")
+        print(f"Request Method: {request.method}")
+        
+        mobile = request.data.get('mobile')
+        purpose = request.data.get('purpose', 'login')  # signup, login, contact
+        
+        print(f"Mobile: {mobile}")
+        print(f"Purpose: {purpose}")
+        
+        if not mobile:
+            print("=" * 60)
+            print("❌ ERROR: Mobile number is required")
+            print("=" * 60)
+            return Response({'error': 'Mobile number is required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Clean mobile number (remove spaces, dashes, etc.)
+        mobile = ''.join(filter(str.isdigit, str(mobile)))
+        
+        if len(mobile) < 10:
+            print("=" * 60)
+            print(f"❌ ERROR: Invalid mobile number length: {len(mobile)}")
+            print("=" * 60)
+            return Response({'error': 'Invalid mobile number'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Generate 6-digit OTP
+        otp_code = str(random.randint(100000, 999999))
+        
+        # Set expiry to 10 minutes from now
+        expires_at = timezone.now() + timedelta(minutes=10)
+        
+        # Invalidate old OTPs for this mobile
+        OTP.objects.filter(mobile=mobile, is_verified=False, expires_at__gt=timezone.now()).update(is_verified=True)
+        
+        # Create new OTP
+        try:
+            otp = OTP.objects.create(
+                mobile=mobile,
+                otp_code=otp_code,
+                purpose=purpose,
+                expires_at=expires_at
+            )
+            print(f"✅ OTP created in database: ID {otp.id}")
+        except Exception as db_error:
+            print("=" * 60)
+            print(f"❌ DATABASE ERROR: {str(db_error)}")
+            print(f"Traceback: {traceback.format_exc()}")
+            print("=" * 60)
+            return Response({
+                'error': f'Database error: {str(db_error)}'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
+        # Print OTP in terminal for testing
+        print("=" * 60)
+        print("🔐 OTP GENERATED FOR TESTING")
+        print("=" * 60)
+        print(f"📱 Mobile Number: {mobile}")
+        print(f"🎯 Purpose: {purpose.upper()}")
+        print(f"🔑 OTP Code: {otp_code}")
+        print(f"⏰ Expires At: {expires_at.strftime('%Y-%m-%d %H:%M:%S')}")
+        print("=" * 60)
+        print(f"✅ Enter this OTP in the frontend: {otp_code}")
+        print("=" * 60)
+        print()
+        
+        return Response({
+            'message': 'OTP sent successfully',
+            'otp': otp_code  # Remove this in production
+        }, status=status.HTTP_200_OK)
+    except Exception as e:
+        print("=" * 60)
+        print("❌ ERROR IN SEND_OTP:")
+        print(f"Error Type: {type(e).__name__}")
+        print(f"Error Message: {str(e)}")
+        print(f"Traceback: {traceback.format_exc()}")
+        print("=" * 60)
+        return Response({
+            'error': f'Failed to send OTP: {str(e)}'
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def verify_otp(request):
+    """
+    Verify OTP for normal users.
+    Flow:
+    - If user exists and is_registered=True -> Login directly
+    - If user exists but is_registered=False -> Need to complete profile
+    - If user doesn't exist -> Create user, need to complete profile
+    """
+    try:
+        mobile = request.data.get('mobile')
+        otp_code = request.data.get('otp_code')
+        
+        if not mobile or not otp_code:
+            return Response({
+                'error': 'Mobile and OTP code are required',
+                'code': 'MISSING_FIELDS'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Find valid OTP (check both login and signup purposes)
+        otp = OTP.objects.filter(
+            mobile=mobile,
+            otp_code=otp_code,
+            is_verified=False,
+            expires_at__gt=timezone.now()
+        ).first()
+        
+        if not otp:
+            return Response({
+                'error': 'Invalid or expired OTP',
+                'code': 'INVALID_OTP'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Mark OTP as verified
+        otp.is_verified = True
+        otp.save()
+        
+        # Check if user exists
+        user = User.objects.filter(mobile=mobile).first()
+        
+        if user and user.is_registered:
+            # User exists and is registered - Login directly
+            user.last_login = timezone.now()
+            user.save()
+            
+            serializer = UserSerializer(user)
+            access_token = AccessToken.for_user(user)
+            
+            return Response({
+                'message': 'Login successful',
+                'user': serializer.data,
+                'access_token': str(access_token),
+                'needs_registration': False
+            }, status=status.HTTP_200_OK)
+        
+        elif user and not user.is_registered:
+            # User exists but not registered - Need profile completion
+            return Response({
+                'message': 'OTP verified. Please complete your profile.',
+                'needs_registration': True,
+                'mobile': mobile
+            }, status=status.HTTP_200_OK)
+        
+        else:
+            # New user - Create and need profile completion
+            user = User.objects.create(mobile=mobile, is_registered=False)
+            return Response({
+                'message': 'OTP verified. Please complete your profile.',
+                'needs_registration': True,
+                'mobile': mobile
+            }, status=status.HTTP_200_OK)
+            
+    except Exception as e:
+        print(f"❌ ERROR IN VERIFY_OTP: {str(e)}")
+        return Response({
+            'error': f'Failed to verify OTP: {str(e)}',
+            'code': 'VERIFICATION_ERROR'
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def complete_registration(request):
+    """Complete user registration after OTP verification"""
+    try:
+        mobile = request.data.get('mobile')
+        first_name = request.data.get('first_name')
+        last_name = request.data.get('last_name')
+        email = request.data.get('email', '')
+        
+        if not mobile or not first_name or not last_name:
+            return Response({
+                'error': 'Mobile, first name and last name are required',
+                'code': 'MISSING_FIELDS'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        user = User.objects.filter(mobile=mobile).first()
+        
+        if not user:
+            return Response({
+                'error': 'User not found. Please verify OTP first.',
+                'code': 'USER_NOT_FOUND'
+            }, status=status.HTTP_404_NOT_FOUND)
+        
+        # Update user profile
+        user.first_name = first_name
+        user.last_name = last_name
+        if email:
+            user.email = email
+        user.is_registered = True
+        user.last_login = timezone.now()
+        user.save()
+        
+        serializer = UserSerializer(user)
+        access_token = AccessToken.for_user(user)
+        
+        return Response({
+            'message': 'Registration successful',
+            'user': serializer.data,
+            'access_token': str(access_token)
+        }, status=status.HTTP_201_CREATED)
+        
+    except Exception as e:
+        print(f"❌ ERROR IN COMPLETE_REGISTRATION: {str(e)}")
+        return Response({
+            'error': f'Registration failed: {str(e)}',
+            'code': 'REGISTRATION_ERROR'
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+from rest_framework.views import APIView
+from rest_framework.permissions import AllowAny
+from rest_framework.response import Response
+from rest_framework import status
+
+class ProjectEnquiryCreateAPIView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        # 1️⃣ Bind request data to serializer
+        serializer = ProjectEnquirySerializer(data=request.data)
+
+        # 2️⃣ Validate data
+        if not serializer.is_valid():
+            return Response(
+                serializer.errors,
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # 3️⃣ Get mobile from validated data
+        mobile = serializer.validated_data.get('mobile')
+
+        # 4️⃣ Find user by mobile
+        user = User.objects.filter(mobile=mobile).first()
+        if not user:
+            return Response(
+                {'error': 'User not found, please register first'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        # 5️⃣ Inject user into validated data
+        serializer.validated_data['user'] = user
+
+        # 6️⃣ Save enquiry
+        enquiry = serializer.save()
+
+        # 7️⃣ Success response
+        return Response(
+            {
+                'message': 'Project enquiry created successfully',
+                'data': ProjectEnquirySerializer(enquiry).data
+            },
+            status=status.HTTP_201_CREATED
+        )
 
 
 class IsCustomAuthenticated(BasePermission):
@@ -1006,222 +1273,10 @@ class FlatDetailView(APIView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
-# Authentication Views
-@api_view(['POST'])
-@permission_classes([AllowAny])
-def send_otp(request):
-    """Send OTP to mobile number"""
-    try:
-        print("=" * 60)
-        print("📥 OTP REQUEST RECEIVED")
-        print("=" * 60)
-        print(f"Request Data: {request.data}")
-        print(f"Request Method: {request.method}")
-        
-        mobile = request.data.get('mobile')
-        purpose = request.data.get('purpose', 'login')  # signup, login, contact
-        
-        print(f"Mobile: {mobile}")
-        print(f"Purpose: {purpose}")
-        
-        if not mobile:
-            print("=" * 60)
-            print("❌ ERROR: Mobile number is required")
-            print("=" * 60)
-            return Response({'error': 'Mobile number is required'}, status=status.HTTP_400_BAD_REQUEST)
-        
-        # Clean mobile number (remove spaces, dashes, etc.)
-        mobile = ''.join(filter(str.isdigit, str(mobile)))
-        
-        if len(mobile) < 10:
-            print("=" * 60)
-            print(f"❌ ERROR: Invalid mobile number length: {len(mobile)}")
-            print("=" * 60)
-            return Response({'error': 'Invalid mobile number'}, status=status.HTTP_400_BAD_REQUEST)
-        
-        # Generate 6-digit OTP
-        otp_code = str(random.randint(100000, 999999))
-        
-        # Set expiry to 10 minutes from now
-        expires_at = timezone.now() + timedelta(minutes=10)
-        
-        # Invalidate old OTPs for this mobile
-        OTP.objects.filter(mobile=mobile, is_verified=False, expires_at__gt=timezone.now()).update(is_verified=True)
-        
-        # Create new OTP
-        try:
-            otp = OTP.objects.create(
-                mobile=mobile,
-                otp_code=otp_code,
-                purpose=purpose,
-                expires_at=expires_at
-            )
-            print(f"✅ OTP created in database: ID {otp.id}")
-        except Exception as db_error:
-            print("=" * 60)
-            print(f"❌ DATABASE ERROR: {str(db_error)}")
-            print(f"Traceback: {traceback.format_exc()}")
-            print("=" * 60)
-            return Response({
-                'error': f'Database error: {str(db_error)}'
-            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        
-        # Print OTP in terminal for testing
-        print("=" * 60)
-        print("🔐 OTP GENERATED FOR TESTING")
-        print("=" * 60)
-        print(f"📱 Mobile Number: {mobile}")
-        print(f"🎯 Purpose: {purpose.upper()}")
-        print(f"🔑 OTP Code: {otp_code}")
-        print(f"⏰ Expires At: {expires_at.strftime('%Y-%m-%d %H:%M:%S')}")
-        print("=" * 60)
-        print(f"✅ Enter this OTP in the frontend: {otp_code}")
-        print("=" * 60)
-        print()
-        
-        return Response({
-            'message': 'OTP sent successfully',
-            'otp': otp_code  # Remove this in production
-        }, status=status.HTTP_200_OK)
-    except Exception as e:
-        print("=" * 60)
-        print("❌ ERROR IN SEND_OTP:")
-        print(f"Error Type: {type(e).__name__}")
-        print(f"Error Message: {str(e)}")
-        print(f"Traceback: {traceback.format_exc()}")
-        print("=" * 60)
-        return Response({
-            'error': f'Failed to send OTP: {str(e)}'
-        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
-@api_view(['POST'])
-@permission_classes([AllowAny])
-def verify_otp(request):
-    """
-    Verify OTP for normal users.
-    Flow:
-    - If user exists and is_registered=True -> Login directly
-    - If user exists but is_registered=False -> Need to complete profile
-    - If user doesn't exist -> Create user, need to complete profile
-    """
-    try:
-        mobile = request.data.get('mobile')
-        otp_code = request.data.get('otp_code')
-        
-        if not mobile or not otp_code:
-            return Response({
-                'error': 'Mobile and OTP code are required',
-                'code': 'MISSING_FIELDS'
-            }, status=status.HTTP_400_BAD_REQUEST)
-        
-        # Find valid OTP (check both login and signup purposes)
-        otp = OTP.objects.filter(
-            mobile=mobile,
-            otp_code=otp_code,
-            is_verified=False,
-            expires_at__gt=timezone.now()
-        ).first()
-        
-        if not otp:
-            return Response({
-                'error': 'Invalid or expired OTP',
-                'code': 'INVALID_OTP'
-            }, status=status.HTTP_400_BAD_REQUEST)
-        
-        # Mark OTP as verified
-        otp.is_verified = True
-        otp.save()
-        
-        # Check if user exists
-        user = User.objects.filter(mobile=mobile).first()
-        
-        if user and user.is_registered:
-            # User exists and is registered - Login directly
-            user.last_login = timezone.now()
-            user.save()
-            
-            serializer = UserSerializer(user)
-            access_token = AccessToken.for_user(user)
-            
-            return Response({
-                'message': 'Login successful',
-                'user': serializer.data,
-                'access_token': str(access_token),
-                'needs_registration': False
-            }, status=status.HTTP_200_OK)
-        
-        elif user and not user.is_registered:
-            # User exists but not registered - Need profile completion
-            return Response({
-                'message': 'OTP verified. Please complete your profile.',
-                'needs_registration': True,
-                'mobile': mobile
-            }, status=status.HTTP_200_OK)
-        
-        else:
-            # New user - Create and need profile completion
-            user = User.objects.create(mobile=mobile, is_registered=False)
-            return Response({
-                'message': 'OTP verified. Please complete your profile.',
-                'needs_registration': True,
-                'mobile': mobile
-            }, status=status.HTTP_200_OK)
-            
-    except Exception as e:
-        print(f"❌ ERROR IN VERIFY_OTP: {str(e)}")
-        return Response({
-            'error': f'Failed to verify OTP: {str(e)}',
-            'code': 'VERIFICATION_ERROR'
-        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
-@api_view(['POST'])
-@permission_classes([AllowAny])
-def complete_registration(request):
-    """Complete user registration after OTP verification"""
-    try:
-        mobile = request.data.get('mobile')
-        first_name = request.data.get('first_name')
-        last_name = request.data.get('last_name')
-        email = request.data.get('email', '')
-        
-        if not mobile or not first_name or not last_name:
-            return Response({
-                'error': 'Mobile, first name and last name are required',
-                'code': 'MISSING_FIELDS'
-            }, status=status.HTTP_400_BAD_REQUEST)
-        
-        user = User.objects.filter(mobile=mobile).first()
-        
-        if not user:
-            return Response({
-                'error': 'User not found. Please verify OTP first.',
-                'code': 'USER_NOT_FOUND'
-            }, status=status.HTTP_404_NOT_FOUND)
-        
-        # Update user profile
-        user.first_name = first_name
-        user.last_name = last_name
-        if email:
-            user.email = email
-        user.is_registered = True
-        user.last_login = timezone.now()
-        user.save()
-        
-        serializer = UserSerializer(user)
-        access_token = AccessToken.for_user(user)
-        
-        return Response({
-            'message': 'Registration successful',
-            'user': serializer.data,
-            'access_token': str(access_token)
-        }, status=status.HTTP_201_CREATED)
-        
-    except Exception as e:
-        print(f"❌ ERROR IN COMPLETE_REGISTRATION: {str(e)}")
-        return Response({
-            'error': f'Registration failed: {str(e)}',
-            'code': 'REGISTRATION_ERROR'
-        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
 

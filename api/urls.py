@@ -23,7 +23,7 @@ from .views import (
     # Tower Amenities
     TowerAmenityListCreateView, TowerAmenityDetailView,
     # Flats
-    FlatListCreateView, FlatDetailView,
+    FlatListCreateView, FlatDetailView, ProjectEnquiryCreateAPIView,
     # Authentication
     send_otp, verify_otp, complete_registration
 )
@@ -32,6 +32,9 @@ urlpatterns = [
     # Projects
     path('projects/', ProjectListCreateView.as_view(), name='project-list-create'),
     path('projects/<int:pk>/', ProjectDetailView.as_view(), name='project-detail'),
+    
+    # Project Enquiry
+    path('project-enquiry/', ProjectEnquiryCreateAPIView.as_view(), name='project-enquiry-create'),
     
     # Clients
     path('clients/', ClientListCreateView.as_view(), name='client-list-create'),
