@@ -2,7 +2,7 @@ from rest_framework import serializers
 from .models import (
     City, Project, Client, Review, BlogPost,
     Contact, Achievement,
-    ProjectImage, ProjectAmenity, Tower, TowerAmenity, Flat, User, OTP , ProjectEnquiry
+    ProjectImage, ProjectAmenity, Tower, TowerAmenity, Flat, ClientUser, OTP , ProjectEnquiry
 )
 
 
@@ -166,9 +166,9 @@ class AchievementSerializer(serializers.ModelSerializer):
         return None
 
 
-class UserSerializer(serializers.ModelSerializer):
+class ClientUserSerializer(serializers.ModelSerializer):
     class Meta:
-        model = User
+        model = ClientUser
         fields = ['id', 'first_name', 'last_name', 'email', 'mobile', 'is_active', 'is_registered', 'created_at']
         read_only_fields = ['id', 'created_at']
 
@@ -182,6 +182,12 @@ class OTPSerializer(serializers.ModelSerializer):
 
 
 class ProjectEnquirySerializer(serializers.ModelSerializer):
+    project = serializers.PrimaryKeyRelatedField(
+        queryset=Project.objects.all()
+    )
+    user = serializers.PrimaryKeyRelatedField(
+        read_only=True
+    )
     class Meta:
         model = ProjectEnquiry
         fields = '__all__'

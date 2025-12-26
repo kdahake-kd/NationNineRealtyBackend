@@ -27,8 +27,16 @@ from .views import (
     # Authentication
     send_otp, verify_otp, complete_registration
 )
+from drf_spectacular.views import (
+    SpectacularAPIView,
+    SpectacularSwaggerView,
+    SpectacularRedocView,
+)
 
 urlpatterns = [
+    path('api/schema/', SpectacularAPIView.as_view(), name='schema'),
+    path('api/docs/', SpectacularSwaggerView.as_view(url_name='schema')),
+    path('api/redoc/', SpectacularRedocView.as_view(url_name='schema')),
     # Projects
     path('projects/', ProjectListCreateView.as_view(), name='project-list-create'),
     path('projects/<int:pk>/', ProjectDetailView.as_view(), name='project-detail'),

@@ -2,7 +2,7 @@ from django.contrib import admin
 from .models import (
     City, Project, Client, Review, BlogPost, 
     Contact, Achievement,
-    ProjectImage, ProjectAmenity, Tower, TowerAmenity, Flat, User, OTP , ProjectEnquiry
+    ProjectImage, ProjectAmenity, Tower, TowerAmenity, Flat, ClientUser, OTP , ProjectEnquiry
 )
 
 
@@ -224,8 +224,8 @@ class FlatAdmin(admin.ModelAdmin):
         return qs.select_related('tower', 'tower__project')
 
 
-@admin.register(User)
-class UserAdmin(admin.ModelAdmin):
+@admin.register(ClientUser)
+class ClientUserAdmin(admin.ModelAdmin):
     list_display = ['first_name', 'last_name', 'mobile', 'email', 'is_active', 'is_registered', 'last_login', 'created_at']
     list_filter = ['is_active', 'is_registered', 'created_at']
     search_fields = ['first_name', 'last_name', 'mobile', 'email']

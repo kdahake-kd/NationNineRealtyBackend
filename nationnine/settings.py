@@ -21,6 +21,7 @@ DEBUG = True
 ALLOWED_HOSTS = ['*']
 
 
+
 # Application definition
 
 INSTALLED_APPS = [
@@ -36,6 +37,7 @@ INSTALLED_APPS = [
     'drf_yasg',  # Swagger API documentation
     'api',
     'admin_panel',
+    'drf_spectacular',
 ]
 
 MIDDLEWARE = [
@@ -147,6 +149,7 @@ REST_FRAMEWORK = {
     'DEFAULT_PERMISSION_CLASSES': (
         'rest_framework.permissions.AllowAny',
     ),
+    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
 }
 
 # JWT Settings

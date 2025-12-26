@@ -1,9 +1,27 @@
 from django.db import models
 from django.core.validators import MinValueValidator, MaxValueValidator
-from django.contrib.auth.models import User    
 
 
-
+class ClientUser(models.Model):
+    """Custom User model for mobile-based authentication (Normal Users)"""
+    first_name = models.CharField(max_length=100, blank=True, default='')
+    last_name = models.CharField(max_length=100, blank=True, default='')
+    email = models.EmailField(blank=True, null=True)
+    mobile = models.CharField(max_length=15, unique=True)
+    is_active = models.BooleanField(default=True)
+    is_registered = models.BooleanField(default=False)  # True after user completes profile
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    last_login = models.DateTimeField(blank=True, null=True)
+    
+    class Meta:
+        ordering = ['-created_at']
+    
+    def __str__(self):
+        if self.first_name:
+            return f"{self.first_name} {self.last_name} - {self.mobile}"
+        return f"User - {self.mobile}"
+        
 class City(models.Model):
     """City model for admin to add cities"""
     name = models.CharField(max_length=100, unique=True)
@@ -187,7 +205,7 @@ class Contact(models.Model):
 
 class ProjectEnquiry(models.Model):
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='Enquiries',help_text='Project Specific Enquiry')
-    user = models.ForeignKey(User, on_delete=models.CASCADE, null=True, blank=True)
+    user = models.ForeignKey(ClientUser, on_delete=models.CASCADE, null=True, blank=True)
     name = models.CharField(max_length=200)
     mobile = models.CharField(max_length=20)
     subject = models.CharField(max_length=200)
@@ -382,25 +400,7 @@ class Flat(models.Model):
         return f"{self.tower.name} - {self.flat_number} ({self.get_flat_type_display()})"
 
 
-class User(models.Model):
-    """Custom User model for mobile-based authentication (Normal Users)"""
-    first_name = models.CharField(max_length=100, blank=True, default='')
-    last_name = models.CharField(max_length=100, blank=True, default='')
-    email = models.EmailField(blank=True, null=True)
-    mobile = models.CharField(max_length=15, unique=True)
-    is_active = models.BooleanField(default=True)
-    is_registered = models.BooleanField(default=False)  # True after user completes profile
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-    last_login = models.DateTimeField(blank=True, null=True)
-    
-    class Meta:
-        ordering = ['-created_at']
-    
-    def __str__(self):
-        if self.first_name:
-            return f"{self.first_name} {self.last_name} - {self.mobile}"
-        return f"User - {self.mobile}"
+
 
 
 class OTP(models.Model):

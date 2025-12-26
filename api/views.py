@@ -15,15 +15,17 @@ import traceback
 from .models import (
     City, Project, Client, Review, BlogPost,
     Contact, Achievement,
-    Tower, Flat, User, OTP, ProjectImage, ProjectAmenity, TowerAmenity
+    Tower, Flat, ClientUser, OTP, ProjectImage, ProjectAmenity, TowerAmenity
 )
 from .serializers import (
     CitySerializer, ProjectSerializer, ClientSerializer,
     ReviewSerializer, BlogPostSerializer,
     ContactSerializer, AchievementSerializer,
-    TowerSerializer, FlatSerializer, UserSerializer, OTPSerializer, 
+    TowerSerializer, FlatSerializer, ClientUserSerializer, OTPSerializer, 
     ProjectImageSerializer, ProjectAmenitySerializer, TowerAmenitySerializer , ProjectEnquirySerializer
 )
+from rest_framework.decorators import authentication_classes
+
 
 
 
@@ -155,14 +157,14 @@ def verify_otp(request):
         otp.save()
         
         # Check if user exists
-        user = User.objects.filter(mobile=mobile).first()
+        user = ClientUser.objects.filter(mobile=mobile).first()
         
         if user and user.is_registered:
             # User exists and is registered - Login directly
             user.last_login = timezone.now()
             user.save()
             
-            serializer = UserSerializer(user)
+            serializer = ClientUserSerializer(user)
             access_token = AccessToken.for_user(user)
             
             return Response({
@@ -182,7 +184,7 @@ def verify_otp(request):
         
         else:
             # New user - Create and need profile completion
-            user = User.objects.create(mobile=mobile, is_registered=False)
+            user = ClientUser.objects.create(mobile=mobile, is_registered=False)
             return Response({
                 'message': 'OTP verified. Please complete your profile.',
                 'needs_registration': True,
@@ -213,7 +215,7 @@ def complete_registration(request):
                 'code': 'MISSING_FIELDS'
             }, status=status.HTTP_400_BAD_REQUEST)
         
-        user = User.objects.filter(mobile=mobile).first()
+        user = ClientUser.objects.filter(mobile=mobile).first()
         
         if not user:
             return Response({
@@ -230,7 +232,7 @@ def complete_registration(request):
         user.last_login = timezone.now()
         user.save()
         
-        serializer = UserSerializer(user)
+        serializer = ClientUserSerializer(user)
         access_token = AccessToken.for_user(user)
         
         return Response({
@@ -254,6 +256,7 @@ from rest_framework import status
 
 class ProjectEnquiryCreateAPIView(APIView):
     permission_classes = [AllowAny]
+    authentication_classes = []
 
     def post(self, request):
         # 1️⃣ Bind request data to serializer
@@ -268,20 +271,15 @@ class ProjectEnquiryCreateAPIView(APIView):
 
         # 3️⃣ Get mobile from validated data
         mobile = serializer.validated_data.get('mobile')
-
         # 4️⃣ Find user by mobile
-        user = User.objects.filter(mobile=mobile).first()
+        user = ClientUser.objects.filter(mobile=mobile).first()
         if not user:
             return Response(
                 {'error': 'User not found, please register first'},
                 status=status.HTTP_404_NOT_FOUND
             )
 
-        # 5️⃣ Inject user into validated data
-        serializer.validated_data['user'] = user
-
-        # 6️⃣ Save enquiry
-        enquiry = serializer.save()
+        enquiry = serializer.save(user=user)
 
         # 7️⃣ Success response
         return Response(
@@ -340,6 +338,7 @@ class ProjectListCreateView(APIView):
     POST: Create new project (Admin only)
     """
     permission_classes = [AllowAny]
+    authentication_classes = []
     
     def get_queryset(self):
         queryset = Project.objects.all()
@@ -424,6 +423,7 @@ class ProjectDetailView(APIView):
     DELETE: Delete project (Admin only)
     """
     permission_classes = [AllowAny]
+    authentication_classes = []
     
     def get_object(self, pk):
         try:
@@ -472,6 +472,7 @@ class ProjectDetailView(APIView):
 class ClientListCreateView(APIView):
     """List all clients or create a new client"""
     permission_classes = [AllowAny]
+    authentication_classes = []
     
     def get(self, request):
         clients = Client.objects.all()
@@ -491,6 +492,7 @@ class ClientListCreateView(APIView):
 class ClientDetailView(APIView):
     """Retrieve, update or delete a client instance"""
     permission_classes = [AllowAny]
+    authentication_classes = []
     
     def get_object(self, pk):
         try:
@@ -534,6 +536,7 @@ class ClientDetailView(APIView):
 class ReviewListCreateView(APIView):
     """List all reviews or create a new review"""
     permission_classes = [AllowAny]
+    authentication_classes = []
     
     def get(self, request):
         reviews = Review.objects.all()
@@ -553,6 +556,7 @@ class ReviewListCreateView(APIView):
 class ReviewDetailView(APIView):
     """Retrieve, update or delete a review instance"""
     permission_classes = [AllowAny]
+    authentication_classes = []
     
     def get_object(self, pk):
         try:
@@ -595,6 +599,7 @@ class ReviewDetailView(APIView):
 
 @api_view(['GET'])
 @permission_classes([AllowAny])
+@authentication_classes([])
 def review_featured(request):
     """Get featured reviews"""
     featured_reviews = Review.objects.filter(featured=True)
@@ -605,6 +610,7 @@ def review_featured(request):
 class BlogPostListCreateView(APIView):
     """List all blog posts or create a new blog post"""
     permission_classes = [AllowAny]
+    authentication_classes = []
     
     def get_queryset(self):
         is_admin = self.request.user and (
@@ -663,6 +669,7 @@ class BlogPostListCreateView(APIView):
 class BlogPostDetailView(APIView):
     """Retrieve, update or delete a blog post instance (by slug)"""
     permission_classes = [AllowAny]
+    authentication_classes = []
     
     def get_object(self, slug):
         try:
@@ -765,6 +772,7 @@ class ContactDetailView(APIView):
 class AchievementListCreateView(APIView):
     """List all achievements or create a new achievement"""
     permission_classes = [AllowAny]
+    authentication_classes = []
     
     def get(self, request):
         achievements = Achievement.objects.all()
@@ -784,6 +792,7 @@ class AchievementListCreateView(APIView):
 class AchievementDetailView(APIView):
     """Retrieve, update or delete an achievement instance"""
     permission_classes = [AllowAny]
+    authentication_classes = []
     
     def get_object(self, pk):
         try:
@@ -827,6 +836,7 @@ class AchievementDetailView(APIView):
 class CityListCreateView(APIView):
     """List all cities or create a new city"""
     permission_classes = [AllowAny]
+    authentication_classes = []
     
     def get_queryset(self):
         is_admin = self.request.user and (
@@ -855,6 +865,7 @@ class CityListCreateView(APIView):
 class CityDetailView(APIView):
     """Retrieve, update or delete a city instance"""
     permission_classes = [AllowAny]
+    authentication_classes = []
     
     def get_object(self, pk):
         try:
